@@ -86,33 +86,22 @@ interrompida e `v_partition_health` mostra volume e tamanho por partição.
 
 ## Modelo de dados
 
+O núcleo dimensional. As camadas de carga (`staging`, `etl`) e de operação (`ops`),
+mais a view materializada de `analytics`, estão no
+[modelo completo](docs/modelo.md).
+
 ```mermaid
 erDiagram
-  ETL_SOURCE_FILES ||--o{ STAGING_STG_PRICE_SURVEY : "alimenta"
-  ETL_SOURCE_FILES ||--o{ CORE_FCT_PRICE_OBSERVATION : "origem"
-  ETL_SOURCE_FILES ||--o{ OPS_LOAD_RUNS : "registra"
   CORE_DIM_DATE ||--o{ CORE_FCT_PRICE_OBSERVATION : "data da coleta"
   CORE_DIM_PRODUCT ||--o{ CORE_FCT_PRICE_OBSERVATION : "produto"
   CORE_DIM_STATION ||--o{ CORE_FCT_PRICE_OBSERVATION : "versao vigente"
   CORE_DIM_BRAND ||--o{ CORE_DIM_STATION : "bandeira"
   CORE_DIM_CITY ||--o{ CORE_DIM_STATION : "municipio"
-  CORE_DIM_BRAND ||--o{ CORE_BRAND_ALIAS : "grafias da fonte"
-  CORE_FCT_PRICE_OBSERVATION ||--o{ ANALYTICS_MV_WEEKLY_PRICE : "agrega"
-  ETL_SOURCE_FILES {
-    int source_file_id PK
-    text semester_label UK
-    text file_encoding "governa a leitura"
-    date period_start
-    date period_end
-    text status
-  }
-  STAGING_STG_PRICE_SURVEY {
-    int source_file_id PK,FK
-    int line_number PK
-    text cnpj_da_revenda "tudo texto"
-    text produto
-    text data_da_coleta
-    text valor_de_venda
+  CORE_FCT_PRICE_OBSERVATION {
+    date collection_date PK "chave de particao"
+    bigint station_key PK
+    smallint product_key PK
+    numeric sale_price
   }
   CORE_DIM_STATION {
     bigint station_key PK
@@ -123,18 +112,11 @@ erDiagram
     date valid_from "SCD tipo 2"
     date valid_to "infinity se vigente"
     boolean is_current
-    uuid attribute_hash "coluna gerada"
   }
   CORE_DIM_BRAND {
     int brand_key PK
     text brand_name UK
     boolean is_unbranded "BRANCA"
-    boolean needs_review
-  }
-  CORE_BRAND_ALIAS {
-    text alias_text PK
-    int brand_key FK
-    boolean is_rename "rotulo, nao identidade"
   }
   CORE_DIM_CITY {
     int city_key PK
@@ -147,40 +129,13 @@ erDiagram
     date full_date UK
     int survey_week_key "grao analitico"
     date week_start_date
-    smallint iso_year
   }
   CORE_DIM_PRODUCT {
     smallint product_key PK
-    text source_product_name UK
     text product_name
     text unit_of_measure "litro ou m3"
   }
-  CORE_FCT_PRICE_OBSERVATION {
-    date collection_date PK,FK "chave de particao"
-    bigint station_key PK,FK
-    smallint product_key PK,FK
-    numeric sale_price
-    int source_file_id FK
-  }
-  ANALYTICS_MV_WEEKLY_PRICE {
-    int survey_week_key PK
-    int city_key PK,FK
-    smallint product_key PK,FK
-    int stations
-    numeric median_price
-    numeric p10_price
-    numeric p90_price
-  }
-  OPS_LOAD_RUNS {
-    bigint run_id PK
-    int source_file_id FK
-    text step
-    text status
-    int rows_out
-  }
 ```
-
-Três pontos que o diagrama torna explícitos:
 
 **`dim_station` é a única dimensão com duas chaves.** `station_key` é a substituta e
 `cnpj` é a natural. É isso que permite ao mesmo posto ter várias linhas — uma por
@@ -190,12 +145,10 @@ período de vigência — sem que o fato precise saber disso.
 correspondente à data da observação. Ligada direto ao fato, seria a bandeira atual
 em todo o histórico.
 
-**`brand_alias` pendura em `dim_brand`, não em `dim_station`.** A normalização de
-grafia acontece uma vez, no catálogo, e não a cada carga.
+O fato tem cinco colunas — as três da chave, o preço e a origem. Bandeira e
+município ficam de fora de propósito: são atributos da versão do posto, e
+replicá-los criaria duas fontes de verdade para o mesmo dado.
 
-Não aparecem no diagrama, por não terem chave estrangeira: as views de `analytics`,
-as views de saúde em `ops` e as dezessete partições do fato, que são objetos
-físicos da mesma tabela.
 
 ---
 
