@@ -8,6 +8,9 @@
 -- a comparação entre BRIN e B-tree em collection_date, que numa tabela carregada
 -- em ordem cronológica não é óbvia a priori.
 --
+-- Dimensionamento (docs/perfil-fonte.md): ~408 mil linhas por semestre em média,
+-- 7 semestres = ~2,86 milhões de linhas. A ~56 bytes por linha, o heap fica em
+-- ~160 MB e a PK em ~90 MB.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS core.fct_price_observation (
@@ -26,7 +29,9 @@ CREATE TABLE IF NOT EXISTS core.fct_price_observation (
 
 COMMENT ON TABLE core.fct_price_observation IS
     'Uma linha por posto, produto e dia de coleta. Preço de venda apenas: '
-    'valor_de_compra vem 100% vazio na fonte desde pelo menos 2023.';
+    'valor_de_compra vem 100% vazio na fonte desde pelo menos 2023. Quando a '
+    'fonte repete o mesmo posto e produto na mesma data com preços diferentes, '
+    'prevalece o menor — regra aplicada na carga, não pela ordem de leitura.';
 
 COMMENT ON COLUMN core.fct_price_observation.collection_date IS
     'Chave de partição e FK para dim_date.full_date. Não há date_key inteiro no '

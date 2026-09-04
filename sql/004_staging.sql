@@ -59,8 +59,9 @@ CREATE INDEX IF NOT EXISTS stg_rejects_rule_idx
     ON staging.stg_rejects (source_file_id, rule_name);
 
 COMMENT ON COLUMN staging.stg_rejects.rule_name IS
-    'Regra violada: cnpj_length, date_unparseable, price_unparseable, '
-    'product_unknown, unit_mismatch, price_out_of_range.';
+    'Regra violada: empty_row, cnpj_missing, cnpj_length, date_unparseable, '
+    'date_out_of_calendar, price_unparseable, price_out_of_range, '
+    'product_unknown, uf_invalid, legal_name_empty, field_count.';
 
 CREATE OR REPLACE VIEW ops.v_reject_summary AS
 SELECT
