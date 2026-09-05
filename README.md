@@ -5,6 +5,9 @@ combustíveis por posto revendedor da ANP. Três milhões de observações, dime
 de postos versionada por SCD Tipo 2, fato particionado por trimestre, e a camada
 analítica que responde o que o modelo foi construído para responder.
 
+**Dashboard público sobre este modelo:** https://mrmansini.github.io/dashboard-precos-combustiveis/
+· [código](https://github.com/mrmansini/dashboard-precos-combustiveis)
+
 ---
 
 ## O que faz
@@ -96,7 +99,8 @@ pode carregar o conjunto inteiro no navegador do visitante.
 `v_site_week_scope` define quais semanas são válidas. `v_site_parity_weekly` é a
 junção das duas, e é o que o dashboard lê. `v_site_city` é a dimensão de
 município, carregada à parte para não repetir o nome em dezenas de milhares de
-linhas.
+linhas. `v_site_price_weekly_uf`, `v_site_brand_effect` e `v_site_coverage`
+alimentam as demais páginas.
 
 ---
 
