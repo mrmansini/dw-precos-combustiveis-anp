@@ -75,12 +75,28 @@ staging.v_price_survey_clean ── camada única de normalização e classifica
    ▼
 analytics.mv_weekly_price ───── rollup semanal por município e produto
    │
-   └──► views de análise ────── série, dispersão, paridade, evento, cobertura
+   ├──► views de análise ────── série, dispersão, paridade, evento, cobertura
+   │
+   └──► views v_site_* ──────── camada de consumo do dashboard publicado
 ```
 
 `ops` acompanha tudo: `load_runs` registra cada etapa de cada carga,
 `v_load_health` expõe duração e taxa de rejeição, `v_stuck_runs` denuncia execução
 interrompida e `v_partition_health` mostra volume e tamanho por partição.
+
+### A camada de consumo
+
+As views com prefixo `v_site_` (migrações 013 e 014) são um contrato explícito:
+são as únicas que o dashboard consome, e nenhuma delas lê o fato diretamente.
+Isolá-las tem duas razões. Mudança em view analítica interna não quebra o site em
+silêncio, e o consumo fica preso ao rollup semanal, que é o grão em que o site
+pode carregar o conjunto inteiro no navegador do visitante.
+
+`v_site_parity_base` faz o pivô etanol/gasolina por município e semana.
+`v_site_week_scope` define quais semanas são válidas. `v_site_parity_weekly` é a
+junção das duas, e é o que o dashboard lê. `v_site_city` é a dimensão de
+município, carregada à parte para não repetir o nome em dezenas de milhares de
+linhas.
 
 ---
 
@@ -149,6 +165,9 @@ O fato tem cinco colunas — as três da chave, o preço e a origem. Bandeira e
 município ficam de fora de propósito: são atributos da versão do posto, e
 replicá-los criaria duas fontes de verdade para o mesmo dado.
 
+**`city_name` não é chave.** VALENCA existe na Bahia e no Rio de Janeiro. Junções
+por nome de município colapsam as duas numa série só, produzindo um resultado
+plausível e errado. O consumo usa `city_key`.
 
 ---
 
@@ -174,6 +193,14 @@ particionamento e este age primeiro. O B-tree por produto custaria 91,5 MB para
 render 5%. Só o B-tree `(station_key, collection_date)` foi aceito: 2,15x na
 análise de evento por 46 MB, e é o único que atende um padrão de acesso que a
 chave primária estruturalmente não serve.
+
+**Corte estrutural, não estatístico, nas semanas de borda.** A primeira e a última
+semana da janela vêm cortadas ao meio pelo recorte dos arquivos: em 29/06/2026 a
+cobertura nacional cai de cerca de 375 para 280 municípios, e 02/01/2023 começa em
+279 antes de estabilizar em 339 três semanas depois. Sem excluí-las, a mediana
+despenca e a dispersão infla sem que nada tenha ocorrido com o preço. A primeira
+tentativa de solução foi um limiar sobre a cobertura mediana histórica, e ele foi
+descartado por medição — ver abaixo.
 
 ---
 
@@ -204,6 +231,16 @@ transbordo e rendeu 9%. O tempo estava na CPU: das consultas de agregação, a
 leitura do fato consome 70 ms de 450. Índice ajuda a localizar linha, não a
 agregar linha.
 
+**Regra estatística não distingue defeito de fenômeno.** Para excluir as semanas
+de borda, tentou-se um limiar de 85% sobre a cobertura mediana histórica. Ele
+cortou as bordas corretamente e cortou também 16 semanas contíguas entre
+14/07/2025 e 27/10/2025, quando a amostra da fonte caiu de cerca de 370 para 270
+municípios e depois se recuperou sozinha. Isso é cobertura real, e excluí-la abria
+um vão de quatro meses no meio da série. O critério passou a ser estrutural — só
+a primeira e a última semana ficam de fora, porque só elas são truncadas por
+construção — e a cobertura de cada semana é exposta ao consumo em vez de ser
+usada para suprimi-la.
+
 **Duas hipóteses derrubadas pelo próprio dado.** A de que o CNPJ de comprimento
 irregular tinha perdido zero à esquerda — eram linhas inteiramente vazias, lixo
 de exportação de um arquivo específico. E a de que o efeito da troca de bandeira
@@ -211,8 +248,9 @@ era artefato do método — o grupo de controle mostrou que não era.
 
 **A fonte é reprocessada.** O CNPJ vem mascarado em 2023 e sem máscara em 2025;
 um arquivo traz 9.114 linhas vazias que nenhum outro tem; a unidade do GNV muda
-de grafia. Nada disso está documentado na origem, e cada um foi descoberto por
-uma carga que quebrou ou por um número que não fechou.
+de grafia; a amostra encolhe 27% durante quatro meses de 2025 e volta. Nada disso
+está documentado na origem, e cada um foi descoberto por uma carga que quebrou ou
+por um número que não fechou.
 
 ---
 
@@ -223,12 +261,19 @@ uma carga que quebrou ou por um número que não fechou.
   postos ativos hoje devem filtrar por presença recente no fato.
 - **A amostra encolhe 13% ao longo da janela.** Comparação plurianual sem painel
   balanceado mede rotatividade, não preço.
+- **A cobertura não é estável dentro da janela.** Além da tendência de queda, há
+  um mergulho de quatro meses em 2025 em que a amostra cai a 270 municípios e se
+  recupera. Análises por semana devem carregar o tamanho da amostra junto.
+- **`dim_city.ibge_code` vem inteiramente nulo** — 462 de 462 municípios. A coluna
+  existe no modelo e a fonte nunca a preenche, o que inviabiliza junção com malha
+  geográfica oficial sem um de-para por nome e UF.
 - **Sem preço de compra**, logo sem margem: a coluna existe no layout da fonte e
   vem vazia em todos os arquivos.
 - **GNV não é comparável** aos demais, por estar em R$/m³ contra R$/litro.
 - **A carga é manual**, sem agendamento.
 - **A verificação cobre estrutura, não conteúdo analítico**: 19 checagens, cinco
-  delas negativas, confirmando que as constraints recusam dado inválido.
+  delas negativas, confirmando que as constraints recusam dado inválido. As views
+  `v_site_*` não têm checagem de assinatura.
 
 A lista completa está em [`docs/decisoes.md`](docs/decisoes.md).
 
@@ -248,7 +293,7 @@ pip install -r requirements.txt
 
 echo 'DATABASE_URL=postgresql://usuario:senha@host/banco?sslmode=require' > .env
 
-python src/migrate.py         # aplica as 12 migrações
+python src/migrate.py         # aplica as 14 migrações
 python src/verify_schema.py   # 19 checagens de estrutura e garantias
 python src/verify_access.py   # 16 checagens de separação de papéis
 ```
@@ -280,7 +325,7 @@ python src/benchmark_workmem.py
 
 ```
 sql/
-  001..012_*.sql          migrações numeradas e idempotentes
+  001..014_*.sql          migrações numeradas e idempotentes
   queries/                consultas analíticas, uma por pergunta
 src/
   migrate.py              aplica migrações, com ledger e checksum
