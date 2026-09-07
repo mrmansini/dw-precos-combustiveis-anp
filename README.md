@@ -46,14 +46,20 @@ algum, aos quais se atribuíram datas de evento falsas. O controle veio limpo �
 48,7% abaixo do mercado é a moeda justa —, o que sustenta os números dos eventos:
 o desbandeiramento fica a 5,9 erros padrão do controle.
 
-A hipótese original estava errada. Esperava-se que os sinais se invertessem entre
-desbandeiramento e bandeiramento; os dois reduzem o preço, e o desbandeiramento
-reduz 3,5 vezes mais. O efeito é robusto estatisticamente e modesto
-economicamente: três centavos em uma gasolina de seis reais.
+A direção do desbandeiramento é a esperada e tem mecanismo conhecido: a regulação
+da ANP obriga o posto bandeirado a comprar só do distribuidor cuja marca exibe,
+enquanto o sem bandeira negocia livremente. O que não tem correspondente na
+literatura é o outro lado — adotar uma bandeira também reduziu o preço, quando o
+esperado seria o contrário.
 
-Detalhamento, ressalvas de desenho e o segundo resultado — a paridade
-etanol/gasolina, que reproduz a geografia da produção de cana sem que essa
-informação esteja em lugar algum do modelo — em [`docs/resultados.md`](docs/resultados.md).
+A hipótese original, de sinais opostos, está errada. Os dois reduzem, e o
+desbandeiramento reduz 3,5 vezes mais. O efeito é robusto estatisticamente e
+modesto economicamente: três centavos em uma gasolina de seis reais.
+
+Detalhamento, comparação com a literatura do setor, duas hipóteses testadas e o
+segundo resultado — a paridade etanol/gasolina, que reproduz a geografia da
+produção de cana sem que essa informação esteja em lugar algum do modelo — em
+[`docs/resultados.md`](docs/resultados.md).
 
 ---
 
@@ -89,18 +95,24 @@ interrompida e `v_partition_health` mostra volume e tamanho por partição.
 
 ### A camada de consumo
 
-As views com prefixo `v_site_` (migrações 013 e 014) são um contrato explícito:
+As views com prefixo `v_site_` (migrações 013 a 015) são um contrato explícito:
 são as únicas que o dashboard consome, e nenhuma delas lê o fato diretamente.
 Isolá-las tem duas razões. Mudança em view analítica interna não quebra o site em
 silêncio, e o consumo fica preso ao rollup semanal, que é o grão em que o site
 pode carregar o conjunto inteiro no navegador do visitante.
 
-`v_site_parity_base` faz o pivô etanol/gasolina por município e semana.
-`v_site_week_scope` define quais semanas são válidas. `v_site_parity_weekly` é a
-junção das duas, e é o que o dashboard lê. `v_site_city` é a dimensão de
-município, carregada à parte para não repetir o nome em dezenas de milhares de
-linhas. `v_site_price_weekly_uf`, `v_site_brand_effect` e `v_site_coverage`
-alimentam as demais páginas.
+| View | Papel |
+|---|---|
+| `v_site_parity_base` | Pivô etanol/gasolina por município e semana |
+| `v_site_week_scope` | Semanas válidas, e a cobertura de cada uma |
+| `v_site_parity_weekly` | Junção das duas — é o que o dashboard lê |
+| `v_site_city` | Dimensão de município, carregada à parte |
+| `v_site_price_weekly_uf` | Série semanal por UF e produto |
+| `v_site_brand_effect` | Eventos de troca de bandeira |
+| `v_site_coverage` | Cobertura semanal, **sem** filtro de bordas |
+
+`v_site_coverage` fica fora do escopo temporal de propósito: a página de cobertura
+do dashboard existe justamente para mostrar as semanas truncadas.
 
 ---
 
@@ -169,22 +181,24 @@ O fato tem cinco colunas — as três da chave, o preço e a origem. Bandeira e
 município ficam de fora de propósito: são atributos da versão do posto, e
 replicá-los criaria duas fontes de verdade para o mesmo dado.
 
-**`city_name` não é chave.** VALENCA existe na Bahia e no Rio de Janeiro. Junções
-por nome de município colapsam as duas numa série só, produzindo um resultado
-plausível e errado. O consumo usa `city_key`.
+**`city_name` não é chave.** VALENCA existe na Bahia e no Rio de Janeiro, e é o
+único nome duplicado. Junções por nome de município colapsam as duas numa série
+só, produzindo um resultado plausível e errado. O consumo usa `city_key`.
 
 ---
 
 ## Decisões apoiadas em medição
 
-Três exemplos, com os números completos em
-[`docs/decisoes.md`](docs/decisoes.md) e [`docs/performance.md`](docs/performance.md).
+Os números completos em [`docs/decisoes.md`](docs/decisoes.md) e
+[`docs/performance.md`](docs/performance.md).
 
 **Alias de bandeira.** Comparando os extremos da janela, 1.784 de 5.071 postos
 apareciam com bandeira diferente. Medindo as transições, 64% eram renomeação de
 rótulo: `VIBRA ENERGIA` para `VIBRA` levou 1.012 postos de uma vez, `ALESAT` para
 `ALE` levou 139. Sem tratamento, o versionamento abriria cerca de 1.150 versões
-falsas e a análise de evento viraria ruído.
+falsas e a análise de evento viraria ruído. O tratamento foi verificado depois,
+de lado: dos 31 bandeiramentos que adotaram `ALE`, todos vêm de `BRANCA`, sem
+resíduo de renomeação.
 
 **Grão desempatado por regra declarada.** A carga revelou 20 casos em que a fonte
 repete o mesmo posto e produto na mesma data, quatro deles com preços diferentes.
@@ -198,13 +212,17 @@ render 5%. Só o B-tree `(station_key, collection_date)` foi aceito: 2,15x na
 análise de evento por 46 MB, e é o único que atende um padrão de acesso que a
 chave primária estruturalmente não serve.
 
+**Um quinto índice foi criado e removido.** Ao materializar o placebo, criou-se um
+índice em `mv_weekly_price (city_key, product_key, week_start_date)` supondo que a
+sondagem do rollup fosse o gargalo. O `EXPLAIN` mostrou que o índice único de 011
+já atende, com `Index Cond` nas duas primeiras colunas e custo total de 1,13. O
+índice novo teria custado cerca de 15 MB do teto de 500 sem ser usado.
+
 **Corte estrutural, não estatístico, nas semanas de borda.** A primeira e a última
 semana da janela vêm cortadas ao meio pelo recorte dos arquivos: em 29/06/2026 a
-cobertura nacional cai de cerca de 375 para 280 municípios, e 02/01/2023 começa em
-279 antes de estabilizar em 339 três semanas depois. Sem excluí-las, a mediana
-despenca e a dispersão infla sem que nada tenha ocorrido com o preço. A primeira
-tentativa de solução foi um limiar sobre a cobertura mediana histórica, e ele foi
-descartado por medição — ver abaixo.
+cobertura nacional cai de 382 para 284 municípios. Sem excluí-las, a mediana
+despenca e a dispersão infla sem que nada tenha ocorrido com o preço. Um limiar
+estatístico foi testado antes e descartado — ver abaixo.
 
 ---
 
@@ -239,11 +257,27 @@ agregar linha.
 de borda, tentou-se um limiar de 85% sobre a cobertura mediana histórica. Ele
 cortou as bordas corretamente e cortou também 16 semanas contíguas entre
 14/07/2025 e 27/10/2025, quando a amostra da fonte caiu de cerca de 370 para 270
-municípios e depois se recuperou sozinha. Isso é cobertura real, e excluí-la abria
-um vão de quatro meses no meio da série. O critério passou a ser estrutural — só
-a primeira e a última semana ficam de fora, porque só elas são truncadas por
-construção — e a cobertura de cada semana é exposta ao consumo em vez de ser
-usada para suprimi-la.
+municípios e depois se recuperou sozinha. A causa do erro foi usar a mediana da
+janela inteira como referência: como a cobertura cai 13% ao longo do período, a
+mediana fica puxada para cima e o limiar acusa semanas normais do fim da série. O
+critério passou a ser estrutural, e a cobertura de cada semana passou a ser
+exposta ao consumo em vez de usada para suprimi-la.
+
+**Desagregar não é o mesmo que testar.** Para explicar o efeito de bandeiramento,
+levantou-se a hipótese de que distribuidoras em expansão ofereceriam condições
+mais agressivas. A desagregação por `brand_after` produziu uma tabela que parecia
+contar uma história — duas regionais nas pontas, três grandes no meio — e o erro
+padrão a desfez: nenhum dos cinco grupos se distingue de zero, e o maior `t` em
+módulo é 1,2. A hipótese não foi refutada; ela ficou sem poder de teste com 11 a
+89 casos por grupo.
+
+**O cálculo caro não pertence ao caminho do build.** A tentativa de materializar
+o grupo de controle placebo como objeto do banco passou de dez minutos no plano
+gratuito e consumiu cota sem contrapartida. Duas rodadas de otimização de SQL
+foram gastas antes de reconhecer que o problema não era o plano de execução: um
+resultado que só muda quando o warehouse é recarregado não precisa ser recalculado
+a cada leitura. O número entra no dashboard como constante citada, e a análise
+completa fica no repositório.
 
 **Duas hipóteses derrubadas pelo próprio dado.** A de que o CNPJ de comprimento
 irregular tinha perdido zero à esquerda — eram linhas inteiramente vazias, lixo
@@ -265,19 +299,27 @@ por um número que não fechou.
   postos ativos hoje devem filtrar por presença recente no fato.
 - **A amostra encolhe 13% ao longo da janela.** Comparação plurianual sem painel
   balanceado mede rotatividade, não preço.
-- **A cobertura não é estável dentro da janela.** Além da tendência de queda, há
-  um mergulho de quatro meses em 2025 em que a amostra cai a 270 municípios e se
-  recupera. Análises por semana devem carregar o tamanho da amostra junto.
+- **A série não é contínua nas viradas de semestre.** Em 01/07/2024, primeiro dia
+  do arquivo do segundo semestre, a cobertura cai de 417 para 339 municípios de
+  uma semana para a outra. A ANP redefine a amostra a cada arquivo, e a densidade
+  — postos por município — sobe nesses pontos, confirmando que são cidades
+  inteiras retiradas. Comparações que atravessem essas datas medem também a troca
+  de amostra.
 - **`dim_city.ibge_code` vem inteiramente nulo** — 462 de 462 municípios. A coluna
   existe no modelo e a fonte nunca a preenche, o que inviabiliza junção com malha
   geográfica oficial sem um de-para por nome e UF.
 - **Sem preço de compra**, logo sem margem: a coluna existe no layout da fonte e
-  vem vazia em todos os arquivos.
+  vem vazia em todos os arquivos. É a limitação central para interpretar o efeito
+  de bandeira, porque impede separar movimento de custo de movimento de margem.
 - **GNV não é comparável** aos demais, por estar em R$/m³ contra R$/litro.
+- **O grupo de controle não é pareado.** Ele valida o método de cálculo; não
+  elimina seleção. Postos que trocam de bandeira provavelmente já passavam por
+  reposicionamento.
 - **A carga é manual**, sem agendamento.
 - **A verificação cobre estrutura, não conteúdo analítico**: 19 checagens, cinco
   delas negativas, confirmando que as constraints recusam dado inválido. As views
-  `v_site_*` não têm checagem de assinatura.
+  `v_site_*` não têm checagem de assinatura, e duas asserções de contagem exata
+  em `dim_brand` e `brand_alias` estão desatualizadas desde a carga completa.
 
 A lista completa está em [`docs/decisoes.md`](docs/decisoes.md).
 
@@ -297,7 +339,7 @@ pip install -r requirements.txt
 
 echo 'DATABASE_URL=postgresql://usuario:senha@host/banco?sslmode=require' > .env
 
-python src/migrate.py         # aplica as 14 migrações
+python src/migrate.py         # aplica as 15 migrações
 python src/verify_schema.py   # 19 checagens de estrutura e garantias
 python src/verify_access.py   # 16 checagens de separação de papéis
 ```
@@ -329,12 +371,13 @@ python src/benchmark_workmem.py
 
 ```
 sql/
-  001..014_*.sql          migrações numeradas e idempotentes
+  001..015_*.sql          migrações numeradas e idempotentes
   queries/                consultas analíticas, uma por pergunta
 src/
   migrate.py              aplica migrações, com ledger e checksum
   load.py                 carga de um ou mais semestres
   verify_schema.py        checagens de estrutura e de garantias
+  verify_access.py        checagens de separação de papéis
   report_load.py          balanço da carga e reconciliação
   benchmark.py            medição de índices
   benchmark_workmem.py    medição de memória de trabalho
@@ -344,9 +387,24 @@ src/
   inspect_staging.py      inspeção do conteúdo em staging
 docs/
   decisoes.md             decisões de modelagem, com a evidência de cada uma
-  resultados.md           achados analíticos
+  resultados.md           achados analíticos e hipóteses testadas
   performance.md          medição de índices, com planos completos
   performance-memoria.md  medição de work_mem
   perfil-fonte.md         perfil dos arquivos
   perfil-grao.md          checagens de grão e transições de bandeira
 ```
+
+---
+
+## Dívidas assumidas
+
+Registradas aqui porque são conhecidas, não porque foram esquecidas.
+
+- `migrate.py` divide o arquivo SQL rastreando aspas simples sem ignorar
+  comentários `--`. Um apóstrofo em comentário quebra a migração com erro que
+  aponta para uma linha distante da causa.
+- `verify_schema.py` tem duas asserções de contagem exata (`dim_brand` esperando
+  22 e tendo 56, `brand_alias` 24 contra 59) escritas antes da carga completa.
+  Contagem exata quebra a cada arquivo novo; o certo são invariantes.
+- Não há checagem de assinatura das views `v_site_*`. Uma mudança de coluna no
+  banco quebra o build do dashboard sem aviso prévio.
